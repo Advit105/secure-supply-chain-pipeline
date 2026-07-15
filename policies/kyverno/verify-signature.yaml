@@ -1,0 +1,31 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signature
+  annotations:
+    policies.kyverno.io/description: >-
+      Rejects any demo-app image that was not keyless-signed by our GitHub
+      Actions pipeline identity. Unsigned or third-party images are denied.
+spec:
+  validationFailureAction: Enforce # switch to Audit to observe before blocking
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: check-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [demo]
+      verifyImages:
+        - imageReferences:
+            - "*.dkr.ecr.*.amazonaws.com/vulnerable-demo-app*"
+          mutateDigest: true # pin the tag to the verified digest on admission
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: https://token.actions.githubusercontent.com
+                    # Lock to your repo + workflow so only THIS pipeline can sign.
+                    subject: "https://github.com/Advit105/secure-supply-chain-pipeline/.github/workflows/pipeline.yml@refs/heads/main"
+                    rekor:
+                      url: https://rekor.sigstore.dev

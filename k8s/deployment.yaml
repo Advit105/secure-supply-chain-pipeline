@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vulnerable-demo-app
+  namespace: demo
+  labels: { app: vulnerable-demo-app }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: vulnerable-demo-app }
+  template:
+    metadata:
+      labels: { app: vulnerable-demo-app }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: app
+          # CI (gitops-bump) rewrites this line to the signed digest. Kyverno
+          # verifies the signature + vuln attestation before the pod is admitted.
+          image: 000000000000.dkr.ecr.us-east-1.amazonaws.com/vulnerable-demo-app:latest
+          ports: [{ containerPort: 3000 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 5

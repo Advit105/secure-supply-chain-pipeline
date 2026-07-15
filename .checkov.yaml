@@ -1,0 +1,10 @@
+# Checkov config for the Terraform IaC scan. Run:  checkov --config-file .checkov.yaml
+directory:
+  - terraform
+framework:
+  - terraform
+compact: true
+quiet: true
+# Fail CI on any hard failure. Uncomment to allow known/accepted findings:
+# skip-check:
+#   - CKV_AWS_XXX

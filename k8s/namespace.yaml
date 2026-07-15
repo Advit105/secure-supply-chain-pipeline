@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+  labels:
+    # Kyverno's image-verification policy is enforced cluster-wide; this label
+    # just opts the namespace into baseline Pod Security as well.
+    pod-security.kubernetes.io/enforce: baseline

@@ -1,0 +1,184 @@
+name: secure-supply-chain
+
+# Design: the scan jobs are for VISIBILITY (they report into DefectDojo and never
+# block the intentionally-vulnerable demo). The HARD GATE is at admission time —
+# Kyverno rejects the image unless it's signed AND its Trivy attestation shows no
+# CRITICALs. So the pipeline happily builds/signs/pushes; the cluster refuses it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # keyless cosign + AWS OIDC
+
+env:
+  AWS_REGION: us-east-1
+  IMAGE_NAME: vulnerable-demo-app
+
+jobs:
+  # ---------- preflight: which optional infra is wired up? ----------
+  # Lets the AWS/DefectDojo jobs SKIP cleanly (grey) instead of FAIL (red) until
+  # you add the secrets. Scan jobs below always run.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      has_aws: ${{ steps.c.outputs.has_aws }}
+      has_dd: ${{ steps.c.outputs.has_dd }}
+    steps:
+      - id: c
+        run: |
+          echo "has_aws=${{ secrets.AWS_ROLE_ARN != '' }}" >> "$GITHUB_OUTPUT"
+          echo "has_dd=${{ secrets.DEFECTDOJO_URL != '' }}" >> "$GITHUB_OUTPUT"
+
+  # ---------- secrets ----------
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.18.4 \
+            detect --source=/repo --config=/repo/.gitleaks.toml \
+            --report-format json --report-path /repo/artifacts/gitleaks.json --exit-code 0
+      - uses: actions/upload-artifact@v4
+        with: { name: gitleaks, path: artifacts/gitleaks.json }
+
+  # ---------- SAST ----------
+  semgrep:
+    runs-on: ubuntu-latest
+    container: returntocorp/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p artifacts
+          semgrep --config semgrep/rules.yaml --config p/default --config p/nodejs \
+            --json --output artifacts/semgrep.json app/ || true
+      - uses: actions/upload-artifact@v4
+        with: { name: semgrep, path: artifacts/semgrep.json }
+
+  # ---------- IaC ----------
+  checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          output_format: json
+          output_file_path: artifacts/
+          soft_fail: true
+      - uses: actions/upload-artifact@v4
+        with: { name: checkov, path: artifacts/results_json.json }
+
+  # ---------- dependencies ----------
+  trivy-fs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install --prefix app --package-lock-only # lockfile → full dep tree for Trivy
+      - uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: app
+          format: json
+          output: artifacts/trivy-fs.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+      - uses: actions/upload-artifact@v4
+        with: { name: trivy-fs, path: artifacts/trivy-fs.json }
+
+  # ---------- build, scan image, SBOM, sign, attest, push ----------
+  build-sign-push:
+    runs-on: ubuntu-latest
+    needs: [preflight, gitleaks, semgrep, checkov, trivy-fs]
+    if: needs.preflight.outputs.has_aws == 'true' # skips until AWS_ROLE_ARN is set
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        run: docker build -t "$IMAGE_NAME:${{ github.sha }}" app/
+
+      - name: Trivy image scan (report only)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: json
+          output: artifacts/trivy-image.json
+          exit-code: "0"
+      - uses: actions/upload-artifact@v4
+        with: { name: trivy-image, path: artifacts/trivy-image.json }
+
+      - name: Install syft + cosign
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          chmod +x /usr/local/bin/cosign
+
+      - name: Push to ECR
+        id: push
+        run: |
+          REG="${{ steps.ecr.outputs.registry }}"
+          REF="$REG/$IMAGE_NAME:${{ github.sha }}"
+          docker tag "$IMAGE_NAME:${{ github.sha }}" "$REF"
+          docker push "$REF"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$REF")
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: SBOM + sign + attest (keyless)
+        run: IMAGE="${{ steps.push.outputs.digest }}" bash scripts/sign-and-attest.sh
+
+      - uses: actions/upload-artifact@v4
+        with: { name: sbom, path: artifacts/sbom.*.json }
+
+  # ---------- aggregate everything into DefectDojo ----------
+  defectdojo:
+    runs-on: ubuntu-latest
+    needs: [preflight, gitleaks, semgrep, checkov, trivy-fs, build-sign-push]
+    # runs even if build-sign-push skipped; skips until DEFECTDOJO_URL is set
+    if: always() && needs.preflight.outputs.has_dd == 'true' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - name: Flatten artifacts
+        run: |
+          mkdir -p artifacts
+          find dl -type f -name '*.json' -exec cp {} artifacts/ \;
+          # checkov-action names its file results_json.json
+          [ -f artifacts/results_json.json ] && mv artifacts/results_json.json artifacts/checkov.json || true
+      - name: Upload to DefectDojo
+        env:
+          DD_URL: ${{ secrets.DEFECTDOJO_URL }}
+          DD_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+        run: bash scripts/defectdojo-upload.sh
+
+  # ---------- GitOps: bump the digest ArgoCD deploys ----------
+  gitops-bump:
+    runs-on: ubuntu-latest
+    needs: [build-sign-push]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin deployment to the new digest
+        run: |
+          DIGEST="${{ needs.build-sign-push.outputs.digest }}"
+          sed -i "s|image: .*vulnerable-demo-app.*|image: ${DIGEST}|" k8s/deployment.yaml
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git commit -am "ci: deploy ${DIGEST}" || echo "no change"
+          git push

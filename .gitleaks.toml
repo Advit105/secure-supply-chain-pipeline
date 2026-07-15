@@ -1,0 +1,19 @@
+# Extends gitleaks' built-in ruleset (AWS keys, tokens, private keys, high-entropy
+# assignments) and adds a rule for the demo's hardcoded JWT secret pattern.
+title = "supply-chain-pipeline gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "hardcoded-jwt-secret"
+description = "Hardcoded signing secret"
+regex = '''(?i)(jwt[_-]?secret|signing[_-]?key)\s*[:=]\s*['"][^'"]{12,}['"]'''
+tags = ["secret", "jwt"]
+
+[allowlist]
+description = "Ignore test fixtures and lockfiles"
+paths = [
+  '''package-lock\.json''',
+  '''.*/testdata/.*''',
+]

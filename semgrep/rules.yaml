@@ -1,0 +1,25 @@
+# Custom rules, layered on top of the registry packs (p/default, p/nodejs,
+# p/secrets) that the CI job also runs. Test locally:  semgrep --config semgrep/rules.yaml app/
+rules:
+  - id: node-child-process-command-injection
+    languages: [javascript]
+    severity: ERROR
+    message: >
+      User-controlled input is concatenated into a shell command passed to
+      child_process.exec, allowing command injection. Use execFile with an
+      argument array instead.
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      owasp: "A03:2021 - Injection"
+    patterns:
+      - pattern: exec($CMD + ...)
+      - pattern-inside: |
+          app.get(..., function ($REQ, $RES) { ... })
+
+  - id: hardcoded-signing-secret
+    languages: [javascript]
+    severity: WARNING
+    message: Hardcoded signing secret. Load it from the environment or a secrets manager.
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+    pattern-regex: '(?i)(JWT_SECRET|SIGNING_KEY)\s*=\s*[''"][^''"]{12,}[''"]'

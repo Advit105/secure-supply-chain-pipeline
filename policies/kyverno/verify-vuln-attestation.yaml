@@ -1,0 +1,40 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-critical-vulnerabilities
+  annotations:
+    policies.kyverno.io/description: >-
+      Requires a cosign vuln attestation (produced from the Trivy scan) signed by
+      our pipeline, AND denies admission if it reports ANY critical vulnerability.
+      This is what makes the intentionally-vulnerable demo image get rejected at
+      deploy time even though CI built and signed it.
+spec:
+  validationFailureAction: Enforce
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: check-vuln-attestation
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [demo]
+      verifyImages:
+        - imageReferences:
+            - "*.dkr.ecr.*.amazonaws.com/vulnerable-demo-app*"
+          attestations:
+            - type: https://cosign.sigstore.dev/attestation/vuln/v1
+              attestors:
+                - entries:
+                    - keyless:
+                        issuer: https://token.actions.githubusercontent.com
+                        subject: "https://github.com/Advit105/secure-supply-chain-pipeline/.github/workflows/pipeline.yml@refs/heads/main"
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
+                    # JMESPath over the Trivy cosign-vuln predicate: count CRITICALs.
+                    # Must be zero for the pod to be admitted.
+                    - key: "{{ scanner.result.Results[].Vulnerabilities[?Severity=='CRITICAL'][] | length(@) }}"
+                      operator: Equals
+                      value: 0
