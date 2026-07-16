@@ -11,7 +11,9 @@ variable "repository_name" {
 }
 
 variable "github_repository" {
-  description = "GitHub org/repo allowed to assume the CI role via OIDC"
+  # GitHub's OIDC sub claim embeds immutable owner/repo IDs on newer accounts
+  # (owner@id/repo@id). Get yours by decoding a workflow token's sub claim.
+  description = "GitHub owner@id/repo@id allowed to assume the CI role via OIDC"
   type        = string
-  default     = "Advit105/secure-supply-chain-pipeline"
+  default     = "Advit105@149078227/secure-supply-chain-pipeline@1301808971"
 }
