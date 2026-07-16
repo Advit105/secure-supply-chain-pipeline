@@ -1,0 +1,62 @@
+# Prometheus: scrapes the Pushgateway (CI pipeline metrics) and Dependency-Track (/metrics,
+# live portfolio vulnerability counts). Grafana reads from here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: security-tools
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 30s
+    scrape_configs:
+      - job_name: pushgateway
+        honor_labels: true # keep the metrics' own job/instance labels, not the gateway's
+        static_configs:
+          - targets: ['pushgateway:9091']
+      - job_name: dependency-track
+        metrics_path: /metrics
+        static_configs:
+          - targets: ['dtrack-apiserver:8080']
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: security-tools
+  labels: { app: prometheus }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: prometheus }
+  template:
+    metadata:
+      labels: { app: prometheus }
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.54.1
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=7d
+          ports:
+            - { name: http, containerPort: 9090 }
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus }
+          resources:
+            requests: { cpu: "100m", memory: 256Mi }
+            limits: { cpu: "500m", memory: 512Mi }
+      volumes:
+        - name: config
+          configMap: { name: prometheus-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: security-tools
+  labels: { app: prometheus }
+spec:
+  selector: { app: prometheus }
+  ports:
+    - { name: http, port: 9090, targetPort: http }
