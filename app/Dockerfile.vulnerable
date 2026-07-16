@@ -1,0 +1,20 @@
+# BASELINE (pre-hardening) image, kept only as the measurement anchor for
+# scripts/measure-cve-delta.sh — it scans this vs the hardened app/Dockerfile to
+# print the before/after CVE drop. Not built or deployed by CI. The single-stage
+# bullseye base here is what the hardened Dockerfile replaces with distroless.
+FROM node:18.19.0-bullseye-slim
+
+WORKDIR /app
+
+# non-root: Kyverno/Checkov best-practice, and it's one line.
+RUN useradd --create-home --shell /usr/sbin/nologin appuser
+
+COPY package.json ./
+RUN npm install --omit=dev && npm cache clean --force
+
+COPY server.js ./
+
+USER appuser
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=3s CMD node -e "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+CMD ["node", "server.js"]

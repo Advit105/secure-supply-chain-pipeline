@@ -1,0 +1,28 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/Advit105/secure-supply-chain-pipeline/vex/vulnerable-demo-app",
+  "author": "Advit Sharma <advitsharma0902@gmail.com>",
+  "role": "Application Security Owner",
+  "timestamp": "2026-07-16T00:00:00.000Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": { "name": "CVE-2021-44906" },
+      "products": [
+        { "@id": "pkg:npm/minimist@1.2.0" }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "minimist is present in the dependency tree but the application never parses process argv (it is a long-running HTTP server, not a CLI). The prototype-pollution sink is never reached at runtime."
+    },
+    {
+      "vulnerability": { "name": "CVE-2019-10744" },
+      "products": [
+        { "@id": "pkg:npm/lodash@4.17.4" }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The vulnerable lodash defaultsDeep merge is never called with attacker-controlled input; the app uses lodash only for internal, static data shaping."
+    }
+  ]
+}

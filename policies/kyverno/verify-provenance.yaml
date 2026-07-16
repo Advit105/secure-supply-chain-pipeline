@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/kyverno.io/clusterpolicy_v1.json
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-build-provenance
+  annotations:
+    policies.kyverno.io/description: >-
+      Requires a keyless-signed SLSA v1 build-provenance attestation AND asserts
+      its CONTENT: the image must have been built from THIS repo by a GitHub-hosted
+      runner. This is stronger than "is it signed" — it proves where the artifact
+      came from, so an attacker who obtains signing access still can't admit an
+      image whose provenance points at a different repository.
+spec:
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: check-provenance
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [demo]
+      verifyImages:
+        - imageReferences:
+            - "*.dkr.ecr.*.amazonaws.com/vulnerable-demo-app*"
+          failureAction: Enforce # deny when provenance is missing or points elsewhere
+          attestations:
+            - type: https://slsa.dev/provenance/v1
+              attestors:
+                - entries:
+                    - keyless:
+                        issuer: https://token.actions.githubusercontent.com
+                        subject: "https://github.com/Advit105/secure-supply-chain-pipeline/.github/workflows/pipeline.yml@refs/heads/main"
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
+                    # Provenance must claim it was built from OUR repository...
+                    - key: "{{ buildDefinition.externalParameters.workflow.repository }}"
+                      operator: Equals
+                      value: https://github.com/Advit105/secure-supply-chain-pipeline
+                    # ...by a GitHub-hosted runner (rejects hand-forged predicates
+                    # that copy the repo URL but not a real builder).
+                    - key: "{{ buildDefinition.buildType }}"
+                      operator: Equals
+                      value: https://github.com/actions/runner/github-hosted

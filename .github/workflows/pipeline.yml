@@ -27,11 +27,17 @@ jobs:
     outputs:
       has_aws: ${{ steps.c.outputs.has_aws }}
       has_dd: ${{ steps.c.outputs.has_dd }}
+      has_dt: ${{ steps.c.outputs.has_dt }}
+      has_pgw: ${{ steps.c.outputs.has_pgw }}
+      has_anthropic: ${{ steps.c.outputs.has_anthropic }}
     steps:
       - id: c
         run: |
           echo "has_aws=${{ secrets.AWS_ROLE_ARN != '' }}" >> "$GITHUB_OUTPUT"
           echo "has_dd=${{ secrets.DEFECTDOJO_URL != '' }}" >> "$GITHUB_OUTPUT"
+          echo "has_dt=${{ secrets.DEPTRACK_URL != '' }}" >> "$GITHUB_OUTPUT"
+          echo "has_pgw=${{ secrets.PUSHGATEWAY_URL != '' }}" >> "$GITHUB_OUTPUT"
+          echo "has_anthropic=${{ secrets.ANTHROPIC_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
 
   # ---------- secrets ----------
   gitleaks:
@@ -86,14 +92,39 @@ jobs:
       - name: Install trivy
         run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
       - name: Trivy dependency scan
-        run: trivy fs app --format json --output artifacts/trivy-fs.json --severity CRITICAL,HIGH --exit-code 0
+        # --vex filters out CVEs we've formally triaged as not-applicable (see vex/).
+        # Applied to the REPORT-ONLY scans only, never to the attestation that feeds
+        # the Kyverno gate — the admission gate stays strict on purpose.
+        run: trivy fs app --format json --output artifacts/trivy-fs.json --severity CRITICAL,HIGH --exit-code 0 --vex vex/vulnerable-demo-app.openvex.json
       - uses: actions/upload-artifact@v4
         with: { name: trivy-fs, path: artifacts/trivy-fs.json }
+
+  # ---------- severity gate: HARD-fail on un-waived fixable criticals ----------
+  # Unlike the report-only scans above, this one blocks: a fixable CRITICAL that isn't
+  # covered by a live waiver in .trivyignore.yaml stops the build before anything is
+  # pushed. The demo's intentional criticals ARE waived (a CI-side risk acceptance), so
+  # the pipeline proceeds — and Kyverno still refuses them at admission (it scans without
+  # the waivers). check-waivers.sh first fails the build if any waiver has expired.
+  severity-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Waivers must be current
+        run: bash scripts/check-waivers.sh
+      - name: Build image
+        run: docker build -t "$IMAGE_NAME:${{ github.sha }}" app/
+      - name: Install trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      - name: Fail on un-waived fixable CRITICAL
+        run: |
+          trivy image "$IMAGE_NAME:${{ github.sha }}" \
+            --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            --ignorefile .trivyignore.yaml
 
   # ---------- build, scan image, SBOM, sign, attest, push ----------
   build-sign-push:
     runs-on: ubuntu-latest
-    needs: [preflight, gitleaks, semgrep, checkov, trivy-fs]
+    needs: [preflight, gitleaks, semgrep, checkov, trivy-fs, severity-gate]
     if: needs.preflight.outputs.has_aws == 'true' # skips until AWS_ROLE_ARN is set
     outputs:
       digest: ${{ steps.push.outputs.digest }}
@@ -113,9 +144,17 @@ jobs:
       - name: Install trivy
         run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
       - name: Trivy image scan (report only)
-        run: trivy image "$IMAGE_NAME:${{ github.sha }}" --format json --output artifacts/trivy-image.json --exit-code 0
+        # VEX-filtered visibility scan; the strict, un-filtered scan for the gate is
+        # produced separately by scripts/sign-and-attest.sh.
+        run: trivy image "$IMAGE_NAME:${{ github.sha }}" --format json --output artifacts/trivy-image.json --exit-code 0 --vex vex/vulnerable-demo-app.openvex.json
       - uses: actions/upload-artifact@v4
         with: { name: trivy-image, path: artifacts/trivy-image.json }
+
+      - name: Push security metrics to Pushgateway (Grafana)
+        if: needs.preflight.outputs.has_pgw == 'true'
+        env:
+          PUSHGATEWAY_URL: ${{ secrets.PUSHGATEWAY_URL }}
+        run: bash scripts/push-metrics.sh # GATE_RESULT defaults to 1: we're past the severity gate here
 
       - name: Install syft + cosign
         run: |
@@ -140,7 +179,11 @@ jobs:
         run: IMAGE="${{ steps.push.outputs.digest }}" bash scripts/sign-and-attest.sh
 
       - uses: actions/upload-artifact@v4
-        with: { name: sbom, path: artifacts/sbom.*.json }
+        with:
+          name: sbom
+          path: |
+            artifacts/sbom.*.json
+            artifacts/provenance.slsa.json
 
   # ---------- aggregate everything into DefectDojo ----------
   defectdojo:
@@ -163,6 +206,110 @@ jobs:
           DD_URL: ${{ secrets.DEFECTDOJO_URL }}
           DD_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
         run: bash scripts/defectdojo-upload.sh
+
+  # ---------- continuous SBOM monitoring ----------
+  # Pushes the CycloneDX SBOM into Dependency-Track. Only runs once the image (and
+  # therefore its SBOM artifact) actually built, and only when DEPTRACK_URL is set.
+  dependency-track:
+    runs-on: ubuntu-latest
+    needs: [preflight, build-sign-push]
+    if: always() && needs.preflight.outputs.has_dt == 'true' && needs.build-sign-push.result == 'success' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: sbom, path: artifacts }
+      - name: Upload SBOM to Dependency-Track
+        env:
+          DEPTRACK_URL: ${{ secrets.DEPTRACK_URL }}
+          DEPTRACK_API_KEY: ${{ secrets.DEPTRACK_API_KEY }}
+        run: bash scripts/dependency-track-upload.sh
+
+  # ---------- DAST: OWASP ZAP baseline on an ephemeral per-PR environment ----------
+  # Only on PRs. Boots the freshly-built image as a throwaway container IN the runner
+  # (the runner has no k3d cluster), runs a ZAP baseline against the live app, comments
+  # the result on the PR, and tears the container down. Report-only.
+  dast:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t "$IMAGE_NAME:pr" app/
+      - name: Start ephemeral app + wait for health
+        run: |
+          docker run -d --name dast-target -p 3000:3000 "$IMAGE_NAME:pr"
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000/health >/dev/null && { echo "app up"; break; }
+            sleep 2
+          done
+      - name: ZAP baseline (report only)
+        run: |
+          mkdir -p artifacts && chmod 777 artifacts
+          cp .zap/rules.tsv artifacts/rules.tsv
+          # --network host lets the ZAP container reach the app's published port on the runner.
+          docker run --network host -v "$PWD/artifacts:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://127.0.0.1:3000 -c rules.tsv -J zap.json || true
+      - name: Tear down ephemeral app
+        if: always()
+        run: docker rm -f dast-target || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: zap, path: artifacts/zap.json }
+      - name: Comment ZAP summary on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const risk = {3:'High', 2:'Medium', 1:'Low', 0:'Informational'};
+            let body = '### 🕷️ OWASP ZAP baseline (DAST)\n\nEphemeral container scanned at `http://localhost:3000`.\n\n';
+            try {
+              const z = JSON.parse(fs.readFileSync('artifacts/zap.json', 'utf8'));
+              const alerts = (z.site || []).flatMap(s => s.alerts || []);
+              const counts = {High:0, Medium:0, Low:0, Informational:0};
+              for (const a of alerts) counts[risk[Number(a.riskcode)]]++;
+              body += '| Risk | Count |\n|---|---:|\n';
+              for (const k of ['High','Medium','Low','Informational']) body += `| ${k} | ${counts[k]} |\n`;
+              const top = alerts.filter(a => Number(a.riskcode) >= 2).slice(0, 10);
+              if (top.length) { body += '\n**Medium+ findings:**\n'; for (const a of top) body += `- ${a.name} (${risk[Number(a.riskcode)]})\n`; }
+            } catch (e) { body += `_Could not parse ZAP report: ${e.message}_`; }
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+
+  # ---------- AI-assisted triage on PRs ----------
+  # Feeds the Semgrep/Trivy findings to Claude and posts a prioritized summary on the PR.
+  # Skips cleanly until ANTHROPIC_API_KEY is set.
+  ai-triage:
+    runs-on: ubuntu-latest
+    needs: [preflight, semgrep, trivy-fs]
+    if: github.event_name == 'pull_request' && needs.preflight.outputs.has_anthropic == 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - name: Flatten scan artifacts
+        run: |
+          mkdir -p artifacts
+          find dl -type f -name '*.json' -exec cp {} artifacts/ \;
+      - name: Run AI triage
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/ai-triage.mjs
+      - name: Comment triage on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'artifacts/ai-triage.md';
+            const body = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : '_AI triage produced no output._';
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
 
   # ---------- GitOps: bump the digest ArgoCD deploys ----------
   gitops-bump:

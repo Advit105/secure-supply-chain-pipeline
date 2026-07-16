@@ -1,0 +1,36 @@
+# Prometheus Pushgateway: CI is a batch job, so it can't be scraped directly. The pipeline
+# pushes metrics here (scripts/push-metrics.sh); Prometheus scrapes the gateway. Each CI run
+# overwrites the group and Prometheus samples the trajectory into a time series.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pushgateway
+  namespace: security-tools
+  labels: { app: pushgateway }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pushgateway }
+  template:
+    metadata:
+      labels: { app: pushgateway }
+    spec:
+      containers:
+        - name: pushgateway
+          image: prom/pushgateway:v1.9.0
+          ports:
+            - { name: http, containerPort: 9091 }
+          resources:
+            requests: { cpu: "25m", memory: 32Mi }
+            limits: { cpu: "100m", memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pushgateway
+  namespace: security-tools
+  labels: { app: pushgateway }
+spec:
+  selector: { app: pushgateway }
+  ports:
+    - { name: http, port: 9091, targetPort: http }
