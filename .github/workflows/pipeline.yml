@@ -120,7 +120,10 @@ jobs:
       - name: Install syft + cosign
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          curl -sSfLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          # Pinned to v2: cosign v3 stores signatures in the OCI-referrers/bundle
+          # format, which Kyverno's verifier can't discover yet ("no signatures
+          # found" at admission). v2 writes the legacy .sig/.att tags Kyverno reads.
+          curl -sSfLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/download/v2.6.3/cosign-linux-amd64
           chmod +x /usr/local/bin/cosign
 
       - name: Push to ECR
