@@ -3,7 +3,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = ">= 6.13" # image_tag_mutability_exclusion_filter support
     }
   }
 }
@@ -13,8 +13,15 @@ provider "aws" {
 }
 
 resource "aws_ecr_repository" "app" {
-  name                 = var.repository_name
-  image_tag_mutability = "IMMUTABLE" # signed tags can't be overwritten (CKV_AWS_51)
+  name = var.repository_name
+  # App image tags stay immutable, but cosign stores signatures/attestations
+  # under mutable sha256-* tags that it must update when appending (the second
+  # `cosign attest` rewrites the .att tag — plain IMMUTABLE rejects that PUT).
+  image_tag_mutability = "IMMUTABLE_WITH_EXCLUSION"
+  image_tag_mutability_exclusion_filter {
+    filter      = "sha256-*"
+    filter_type = "WILDCARD"
+  }
 
   image_scanning_configuration {
     scan_on_push = true # AWS-side scanning in addition to Trivy (CKV_AWS_163)
