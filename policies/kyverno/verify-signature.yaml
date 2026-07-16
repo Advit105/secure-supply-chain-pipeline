@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/kyverno.io/clusterpolicy_v1.json
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -7,7 +8,6 @@ metadata:
       Rejects any demo-app image that was not keyless-signed by our GitHub
       Actions pipeline identity. Unsigned or third-party images are denied.
 spec:
-  validationFailureAction: Enforce # switch to Audit to observe before blocking
   background: false
   webhookTimeoutSeconds: 30
   rules:
@@ -20,6 +20,7 @@ spec:
       verifyImages:
         - imageReferences:
             - "*.dkr.ecr.*.amazonaws.com/vulnerable-demo-app*"
+          failureAction: Enforce # deny (not just audit) when verification fails; Audit to observe first
           mutateDigest: true # pin the tag to the verified digest on admission
           attestors:
             - entries:
