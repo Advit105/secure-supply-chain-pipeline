@@ -3,8 +3,8 @@
 # keyless cosign signing. Free (IAM costs nothing).
 
 resource "aws_iam_openid_connect_provider" "github" {
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
   # AWS has trusted GitHub's root CA directly since 2023; a thumbprint is still
   # required by the API but no longer used for validation.
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]

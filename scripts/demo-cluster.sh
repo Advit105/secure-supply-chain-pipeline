@@ -6,7 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REG=267083759123.dkr.ecr.us-east-1.amazonaws.com
+REGION="${AWS_REGION:-us-east-1}"
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text) # your account, not a hardcode
+REG="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com"
 KYVERNO_VER=$(curl -s https://api.github.com/repos/kyverno/kyverno/releases/latest | python3 -c "import sys,json;print(json.load(sys.stdin)['tag_name'])")
 
 echo "==> cluster"
