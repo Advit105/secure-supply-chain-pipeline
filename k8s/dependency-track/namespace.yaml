@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security-tools
+  labels:
+    # Shared by Dependency-Track and the monitoring stack (Prometheus/Grafana).
+    # Defined in both kustomizations so each applies independently; apply is idempotent.
+    app.kubernetes.io/part-of: devsecops-platform

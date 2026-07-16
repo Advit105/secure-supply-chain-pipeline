@@ -1,0 +1,42 @@
+# Dependency-Track web UI (SPA). API_BASE_URL is read by the BROWSER, so it must point at
+# wherever the apiserver is reachable from your machine. For the local demo we port-forward the
+# apiserver to :8081 (see README), so the default below matches that. Change it if you expose
+# the API differently.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dtrack-frontend
+  namespace: security-tools
+  labels: { app: dtrack-frontend }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dtrack-frontend }
+  template:
+    metadata:
+      labels: { app: dtrack-frontend }
+    spec:
+      containers:
+        - name: frontend
+          image: dependencytrack/frontend:4.11.1
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: API_BASE_URL, value: "http://localhost:8081" }
+          resources:
+            requests: { cpu: "50m", memory: 64Mi }
+            limits: { cpu: "250m", memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dtrack-frontend
+  namespace: security-tools
+  labels: { app: dtrack-frontend }
+spec:
+  selector: { app: dtrack-frontend }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

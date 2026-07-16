@@ -1,0 +1,64 @@
+# Dependency-Track API server. Ingests the CycloneDX SBOM (scripts/dependency-track-upload.sh)
+# and continuously re-evaluates it against fresh CVE feeds, so a CVE disclosed AFTER deploy
+# still lights up the already-shipped image. Prometheus (k8s/monitoring) scrapes /metrics.
+#
+# ponytail: embedded H2 datastore + emptyDir-backed PVC — fine for a local demo. For real use,
+# point IServer at an external Postgres and give the PVC a real StorageClass.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dtrack-data
+  namespace: security-tools
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dtrack-apiserver
+  namespace: security-tools
+  labels: { app: dtrack-apiserver }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dtrack-apiserver }
+  template:
+    metadata:
+      labels: { app: dtrack-apiserver }
+    spec:
+      containers:
+        - name: apiserver
+          image: dependencytrack/apiserver:4.11.4
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            # Exposes Prometheus metrics at :8080/metrics for the monitoring stack.
+            - { name: ALPINE_METRICS_ENABLED, value: "true" }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          resources:
+            requests: { cpu: "500m", memory: 1Gi }
+            limits: { cpu: "2", memory: 4Gi }
+          readinessProbe:
+            httpGet: { path: /api/version, port: http }
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dtrack-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dtrack-apiserver
+  namespace: security-tools
+  labels: { app: dtrack-apiserver }
+spec:
+  selector: { app: dtrack-apiserver }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

@@ -1,0 +1,30 @@
+# Time-boxed security waivers (risk register) consumed by the CI severity gate.
+#
+# Policy: the gate (see .github/workflows/pipeline.yml -> severity-gate) fails the build
+# on any FIXABLE CRITICAL. HIGH/MEDIUM/LOW are tracked in DefectDojo/Dependency-Track but
+# don't hard-block, to avoid alert fatigue. Every exception below is explicit, has a
+# reason, and EXPIRES — scripts/check-waivers.sh fails the build once a waiver lapses, so
+# "temporary" exceptions can't silently become permanent.
+#
+# The three waivers below are the demo app's INTENTIONAL vulnerable dependencies, kept so
+# the Kyverno admission gate still has real CRITICALs to reject. Waiving them here is a
+# CI-side risk acceptance only; it does NOT weaken the admission gate (which scans without
+# these waivers), so the image still gets refused at deploy time.
+vulnerabilities:
+  - id: CVE-2021-44906 # minimist@1.2.0 prototype pollution
+    statement: >-
+      Intentional vulnerable-demo dependency retained to exercise the Kyverno admission
+      gate. Not in the execute path (server never parses argv) — see vex/. Accepted for CI.
+    expired_at: 2027-01-16
+
+  - id: CVE-2019-10744 # lodash@4.17.4 prototype pollution (defaultsDeep)
+    statement: >-
+      Intentional vulnerable-demo dependency. Vulnerable merge never called with
+      attacker-controlled input — see vex/. Accepted for CI, tracked for a version bump.
+    expired_at: 2027-01-16
+
+  - id: CVE-2015-9235 # jsonwebtoken@0.4.0 alg confusion / signature bypass
+    statement: >-
+      Intentional vulnerable-demo dependency demonstrating an outdated auth library.
+      Retained so the pipeline has a real critical to surface; accepted for CI only.
+    expired_at: 2027-01-16

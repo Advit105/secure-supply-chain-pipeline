@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: security-tools
+resources:
+  - namespace.yaml
+  - prometheus.yaml
+  - pushgateway.yaml
+  - grafana.yaml
+generatorOptions:
+  disableNameSuffixHash: true # stable ConfigMap names so grafana.yaml can reference them
+configMapGenerator:
+  - name: grafana-datasources
+    files:
+      - grafana/provisioning/datasources/datasource.yaml
+  - name: grafana-dashboard-provider
+    files:
+      - grafana/provisioning/dashboards/provider.yaml
+  - name: grafana-dashboards
+    files:
+      - security.json=grafana/dashboards/security.json
