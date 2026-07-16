@@ -9,3 +9,9 @@ variable "repository_name" {
   type        = string
   default     = "vulnerable-demo-app"
 }
+
+variable "github_repository" {
+  description = "GitHub org/repo allowed to assume the CI role via OIDC"
+  type        = string
+  default     = "Advit105/secure-supply-chain-pipeline"
+}

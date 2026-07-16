@@ -12,13 +12,6 @@ provider "aws" {
   region = var.region
 }
 
-# KMS key so the ECR repo is encrypted with a CMK (Checkov CKV_AWS_51 / CKV_AWS_136).
-resource "aws_kms_key" "ecr" {
-  description             = "CMK for ${var.repository_name} ECR encryption"
-  enable_key_rotation     = true
-  deletion_window_in_days = 7
-}
-
 resource "aws_ecr_repository" "app" {
   name                 = var.repository_name
   image_tag_mutability = "IMMUTABLE" # signed tags can't be overwritten (CKV_AWS_51)
@@ -27,30 +20,42 @@ resource "aws_ecr_repository" "app" {
     scan_on_push = true # AWS-side scanning in addition to Trivy (CKV_AWS_163)
   }
 
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = aws_kms_key.ecr.arn
-  }
+  # ponytail: default AES256 instead of a KMS CMK — a CMK costs $1/mo and this
+  # stays in the free tier. Checkov flags it (CKV_AWS_136), which doubles as a
+  # live IaC finding flowing into DefectDojo. Add the CMK back if cost is fine.
 
   tags = {
     Project = "supply-chain-pipeline"
   }
 }
 
-# Expire untagged images so the registry doesn't accumulate unsigned junk.
+# Keep storage under the 500 MB free-tier allowance: drop untagged layers fast
+# and cap the total image count.
 resource "aws_ecr_lifecycle_policy" "app" {
   repository = aws_ecr_repository.app.name
   policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Expire untagged images after 14 days"
-      selection = {
-        tagStatus   = "untagged"
-        countType   = "sinceImagePushed"
-        countUnit   = "days"
-        countNumber = 14
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Expire untagged images after 7 days"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 7
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep only the 5 most recent images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 5
+        }
+        action = { type = "expire" }
       }
-      action = { type = "expire" }
-    }]
+    ]
   })
 }
