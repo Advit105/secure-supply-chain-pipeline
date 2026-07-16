@@ -87,7 +87,9 @@ make deploy         # register the ArgoCD app; watch the pod get REJECTED
 
 CI needs these repo secrets: `AWS_ROLE_ARN` (OIDC role that can push to ECR),
 `DEFECTDOJO_URL`, `DEFECTDOJO_API_KEY`. Terraform in [`terraform/`](terraform/)
-provisions the ECR repo (immutable tags, KMS encryption, scan-on-push).
+provisions the ECR repo (immutable tags, scan-on-push, free-tier AES256
+encryption — Checkov flags the missing CMK, which is deliberate live demo data)
+plus the GitHub OIDC role CI assumes to push.
 
 ## Layout
 
