@@ -19,7 +19,7 @@ spec:
         - name: app
           # CI (gitops-bump) rewrites this line to the signed digest. Kyverno
           # verifies the signature + vuln attestation before the pod is admitted.
-          image: 267083759123.dkr.ecr.us-east-1.amazonaws.com/vulnerable-demo-app@sha256:97f994349ca833357b5117e09266598bea3f00677c332b975eac03820be3722c
+          image: 267083759123.dkr.ecr.us-east-1.amazonaws.com/vulnerable-demo-app@sha256:2da0cf8c30777a7b36489e9a76f8f1d3b1967a3a5b126dd695d072d131d6180b
           ports: [{ containerPort: 3000 }]
           securityContext:
             allowPrivilegeEscalation: false
