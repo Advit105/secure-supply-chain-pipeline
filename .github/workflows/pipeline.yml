@@ -81,14 +81,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: mkdir -p artifacts && npm install --prefix app --package-lock-only # lockfile → full dep tree for Trivy
-      - uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          scan-type: fs
-          scan-ref: app
-          format: json
-          output: artifacts/trivy-fs.json
-          severity: CRITICAL,HIGH
-          exit-code: "0"
+      # Trivy is a static binary; installing it directly avoids the wrapper
+      # action, whose pinned internals have broken twice (deleted tags upstream).
+      - name: Install trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      - name: Trivy dependency scan
+        run: trivy fs app --format json --output artifacts/trivy-fs.json --severity CRITICAL,HIGH --exit-code 0
       - uses: actions/upload-artifact@v4
         with: { name: trivy-fs, path: artifacts/trivy-fs.json }
 
@@ -112,13 +110,10 @@ jobs:
       - name: Build image
         run: mkdir -p artifacts && docker build -t "$IMAGE_NAME:${{ github.sha }}" app/
 
+      - name: Install trivy
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
       - name: Trivy image scan (report only)
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          format: json
-          output: artifacts/trivy-image.json
-          exit-code: "0"
+        run: trivy image "$IMAGE_NAME:${{ github.sha }}" --format json --output artifacts/trivy-image.json --exit-code 0
       - uses: actions/upload-artifact@v4
         with: { name: trivy-image, path: artifacts/trivy-image.json }
 
