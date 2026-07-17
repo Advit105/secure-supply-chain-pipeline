@@ -22,7 +22,10 @@ spec:
               namespaces: [demo]
       verifyImages:
         - imageReferences:
-            - "*.dkr.ecr.*.amazonaws.com/vulnerable-demo-app*"
+            # "*": the ns/demo match above is the trust boundary — EVERY image deployed there
+            # must pass this policy. Scoping to a repo path instead would let an attacker
+            # bypass the gate by simply naming their image something else.
+            - "*"
           failureAction: Enforce # deny when provenance is missing or points elsewhere
           attestations:
             - type: https://slsa.dev/provenance/v1
