@@ -11,7 +11,7 @@
 #
 # Usage: scripts/red-team.sh
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 pass=0; fail=0
 ok()   { echo "  PASS: $1"; pass=$((pass+1)); }

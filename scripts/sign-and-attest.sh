@@ -12,6 +12,7 @@ set -euo pipefail
 
 IMAGE="${1:-${IMAGE:?set IMAGE to the image ref (use the immutable digest, not a tag)}}"
 OUT="${OUT_DIR:-artifacts}"
+mkdir -p "$OUT"
 export COSIGN_EXPERIMENTAL=1
 
 # 1. Sign.

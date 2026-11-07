@@ -19,7 +19,10 @@ spec:
               namespaces: [demo]
       verifyImages:
         - imageReferences:
-            - "*.dkr.ecr.*.amazonaws.com/vulnerable-demo-app*"
+            # "*": the ns/demo match above is the trust boundary — EVERY image deployed there
+            # must pass this policy. Scoping to a repo path instead would let an attacker
+            # bypass the gate by simply naming their image something else.
+            - "*"
           failureAction: Enforce # deny (not just audit) when verification fails; Audit to observe first
           mutateDigest: true # pin the tag to the verified digest on admission
           attestors:

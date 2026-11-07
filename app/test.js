@@ -5,7 +5,9 @@ const app = require('./server');
 
 const server = app.listen(0, () => {
   const port = server.address().port;
-  http.get(`http://127.0.0.1:${port}/health`, (res) => {
+  // agent:false — the default global agent keeps the socket alive (Node >=19), so
+  // server.close() would never drain and the test would hang instead of exiting.
+  http.get(`http://127.0.0.1:${port}/health`, { agent: false }, (res) => {
     let body = '';
     res.on('data', (c) => (body += c));
     res.on('end', () => {

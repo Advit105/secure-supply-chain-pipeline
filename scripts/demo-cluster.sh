@@ -34,8 +34,25 @@ kubectl -n kyverno rollout status deployment kyverno-admission-controller --time
 
 echo "==> policies"
 kubectl apply -f policies/kyverno/
+# Deploying before the policies are Ready races the webhook registration and the
+# vulnerable image gets ADMITTED — the exact failure the demo exists to prevent.
+kubectl wait --for=condition=Ready clusterpolicy --all --timeout=120s
 kubectl get clusterpolicy
 
 echo
 echo "==> DEPLOY ATTEMPT (expect: DENIED — critical CVEs in the signed attestation)"
-kubectl apply -f k8s/deployment.yaml || echo "  ^ blocked as designed."
+# The first verification on a cold cache can blow the 30s admission-webhook budget
+# (ECR + Sigstore round-trips) and deny with an InternalError instead of the policy
+# message. Still fail-closed, but retry so the demo shows the real denial.
+for attempt in 1 2 3; do
+  if out=$(kubectl apply -f k8s/deployment.yaml 2>&1); then
+    echo "$out"
+    echo "GATE FAILED: the vulnerable image was ADMITTED."
+    exit 1
+  fi
+  echo "$out"
+  case "$out" in
+    *"blocked due to the following policies"*) echo "  ^ blocked as designed."; break ;;
+    *) echo "  (webhook timed out before verification finished — retrying on warm cache)"; sleep 5 ;;
+  esac
+done
